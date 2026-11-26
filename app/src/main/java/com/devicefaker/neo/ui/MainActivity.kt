@@ -28,6 +28,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var targetLabel: TextView
     private lateinit var enabledSwitch: SwitchMaterial
     private lateinit var resetAppBtn: MaterialButton
+    private lateinit var autoClearSwitch: SwitchMaterial
+    private lateinit var clearAppsInfo: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -189,17 +191,60 @@ class MainActivity : AppCompatActivity() {
             addView(box)
         })
 
+        // Auto Clear Data (Root) Card
+        container.addView(makeCard("#111827").apply {
+            val box = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+            box.addView(sectionTitle("🧹 Tự Động Xóa Data App (Cần quyền Root)"))
+
+            autoClearSwitch = SwitchMaterial(this@MainActivity).apply {
+                text = "Tự động xóa Data các app đã chọn khi bấm Lưu"
+                setTextColor(Color.WHITE)
+                isChecked = PrefsStore.isAutoClearEnabled(this@MainActivity)
+                setOnCheckedChangeListener { _, isChecked ->
+                    PrefsStore.setAutoClearEnabled(this@MainActivity, isChecked)
+                }
+            }
+            box.addView(autoClearSwitch)
+
+            clearAppsInfo = TextView(this@MainActivity).apply {
+                textSize = 12f
+                setTextColor(Color.parseColor("#9CA3AF"))
+                setPadding(0, dp(2), 0, dp(8))
+            }
+            box.addView(clearAppsInfo)
+            updateClearAppsInfo()
+
+            val clearRow = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
+            clearRow.addView(makeButton("📋 Chọn App xóa Data", "#D97706") {
+                showSelectClearAppsDialog()
+            }, weightParams())
+            clearRow.addView(makeButton("🧹 Xóa Data ngay", "#DC2626") {
+                clearSelectedAppsData()
+            }, weightParams())
+            box.addView(clearRow)
+
+            addView(box)
+        })
+
         // Save Button
         container.addView(makeButton("💾 LƯU CẤU HÌNH (Áp dụng ngay cho LSPosed)", "#10B981") {
             val profile = readForm()
             val pkg = currentTargetPkg
             if (pkg == null) {
                 PrefsStore.saveGlobalProfile(this, profile)
-                Toast.makeText(this, "✅ Đã lưu Cấu hình Chung (Global)! Hãy tắt và mở lại app mục tiêu.", Toast.LENGTH_LONG).show()
             } else {
                 PrefsStore.saveAppProfile(this, pkg, profile)
                 PrefsStore.setAppEnabled(this, pkg, true)
-                Toast.makeText(this, "✅ Đã lưu cấu hình riêng cho $pkg!", Toast.LENGTH_LONG).show()
+            }
+            if (PrefsStore.isAutoClearEnabled(this)) {
+                clearSelectedAppsData(afterSave = true)
+            } else {
+                val msg = if (pkg == null) {
+                    "✅ Đã lưu Cấu hình Chung (Global)! Hãy tắt và mở lại app mục tiêu."
+                } else {
+                    "✅ Đã lưu cấu hình riêng cho $pkg!"
+                }
+                Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
             }
         }.apply {
             layoutParams = LinearLayout.LayoutParams(
@@ -349,6 +394,83 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton("Hủy", null)
             .show()
+    }
+
+    private fun updateClearAppsInfo() {
+        val list = PrefsStore.getClearDataApps(this)
+        clearAppsInfo.text = if (list.isEmpty()) {
+            "Chưa chọn app nào để tự động xóa Data."
+        } else {
+            "Đã chọn ${list.size} app: ${list.joinToString(", ")}"
+        }
+    }
+
+    private fun showSelectClearAppsDialog() {
+        val apps = getInstalledAppsList()
+        val selected = PrefsStore.getClearDataApps(this)
+        val labels = apps.map { "${it.first} (${it.second})" }.toTypedArray()
+        val checked = BooleanArray(apps.size) { i -> selected.contains(apps[i].second) }
+
+        AlertDialog.Builder(this)
+            .setTitle("Chọn riêng các app cần xóa Data")
+            .setMultiChoiceItems(labels, checked) { _, which, isChecked ->
+                checked[which] = isChecked
+            }
+            .setPositiveButton("Lưu danh sách") { _, _ ->
+                val newSet = mutableSetOf<String>()
+                for (i in apps.indices) {
+                    if (checked[i]) newSet.add(apps[i].second)
+                }
+                PrefsStore.setClearDataApps(this, newSet)
+                updateClearAppsInfo()
+                Toast.makeText(this, "Đã lưu ${newSet.size} app cần xóa Data!", Toast.LENGTH_SHORT).show()
+            }
+            .setNeutralButton("Play Store + Google One") { _, _ ->
+                val quick = setOf("com.android.vending", "com.google.android.apps.subscriptions.red")
+                PrefsStore.setClearDataApps(this, quick)
+                updateClearAppsInfo()
+                Toast.makeText(this, "Đã chọn nhanh Play Store + Google One!", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Hủy", null)
+            .show()
+    }
+
+    private fun clearSelectedAppsData(afterSave: Boolean = false) {
+        val blocked = setOf("android", "system", "com.android.systemui", packageName)
+        val targets = PrefsStore.getClearDataApps(this).filter { it !in blocked }
+        if (targets.isEmpty()) {
+            val msg = if (afterSave) {
+                "✅ Đã lưu cấu hình! (Chưa chọn app nào trong danh sách xóa Data)"
+            } else {
+                "⚠️ Bạn chưa chọn app nào trong danh sách xóa Data!"
+            }
+            Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+            return
+        }
+
+        Toast.makeText(this, "⏳ Đang xóa Data của ${targets.size} app qua Root...", Toast.LENGTH_SHORT).show()
+        Thread {
+            var okCount = 0
+            var rootDenied = false
+            for (pkg in targets) {
+                try {
+                    val proc = Runtime.getRuntime().exec(arrayOf("su", "-c", "pm clear $pkg"))
+                    val code = proc.waitFor()
+                    if (code == 0) okCount++ else if (code == 13 || code == 126 || code == 127) rootDenied = true
+                } catch (_: Exception) {
+                    rootDenied = true
+                }
+            }
+            runOnUiThread {
+                val prefix = if (afterSave) "✅ Đã lưu cấu hình & " else "✅ "
+                val msg = when {
+                    okCount > 0 -> "${prefix}xóa Data thành công $okCount/${targets.size} app!"
+                    rootDenied -> "⚠️ Không có quyền Root! Hãy mở ReSukiSU → cấp quyền Root cho DeviceFaker Neo."
+                    else -> "⚠️ Không xóa được Data (kiểm tra quyền Root trong ReSukiSU)."
+                }
+                Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+            }
+        }.start()
     }
 
     private fun addField(parent: LinearLayout, key: String, labelText: String, randomizer: (() -> String)? = null) {

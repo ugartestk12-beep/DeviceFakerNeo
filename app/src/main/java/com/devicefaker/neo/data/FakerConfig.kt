@@ -207,6 +207,8 @@ object PrefsStore {
     const val KEY_GLOBAL = "global_profile"
     const val KEY_PREFIX_APP = "app_profile_"
     const val KEY_ENABLED_APPS = "enabled_apps"
+    const val KEY_AUTO_CLEAR = "auto_clear_on_save"
+    const val KEY_CLEAR_APPS = "clear_data_apps"
 
     @Suppress("DEPRECATION")
     @SuppressLint("WorldReadableFiles")
@@ -249,5 +251,21 @@ object PrefsStore {
         val set = getEnabledApps(context)
         if (enabled) set.add(pkg) else set.remove(pkg)
         getPrefs(context).edit().putStringSet(KEY_ENABLED_APPS, set).apply()
+    }
+
+    fun isAutoClearEnabled(context: Context): Boolean {
+        return getPrefs(context).getBoolean(KEY_AUTO_CLEAR, false)
+    }
+
+    fun setAutoClearEnabled(context: Context, enabled: Boolean) {
+        getPrefs(context).edit().putBoolean(KEY_AUTO_CLEAR, enabled).apply()
+    }
+
+    fun getClearDataApps(context: Context): MutableSet<String> {
+        return (getPrefs(context).getStringSet(KEY_CLEAR_APPS, emptySet()) ?: emptySet()).toMutableSet()
+    }
+
+    fun setClearDataApps(context: Context, apps: Set<String>) {
+        getPrefs(context).edit().putStringSet(KEY_CLEAR_APPS, apps).apply()
     }
 }
